@@ -39,7 +39,7 @@ OAuth access tokenはCloudflare境界で署名済みAccess JWTへ交換され、
 | `PUT` | `/mcp/api/pat` | PATを検証して保存 |
 | `DELETE` | `/mcp/api/pat` | Gateway上のPATを削除 |
 
-登録時はPlaneの`/api/v1/users/me/`でPATを検証し、AccessのメールとPlaneのメールが一致すること、および`rayven` workspace members APIへアクセスできることを確認します。PAT本体はレスポンスに含めません。
+登録時はPlaneの`/api/v1/users/me/`でPATを検証し、AccessのメールとPlaneのメールが一致すること、および`rayven` workspaceのprojects APIへアクセスできることを確認します。PAT本体はレスポンスに含めません。
 
 ## Exposed tools
 

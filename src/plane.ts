@@ -156,7 +156,7 @@ export async function verifyPat(
 		throw new PlaneApiError(403);
 	}
 
-	await client.request("GET", client.workspacePath("members"));
+	await client.request("GET", client.workspacePath("projects"));
 	const timestamp = now.toISOString();
 	return {
 		pat,

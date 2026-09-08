@@ -69,9 +69,6 @@ function planeFetcher(users: Record<string, { id: string; email: string }>) {
 		if (!user)
 			return Response.json({ detail: "credential rejected" }, { status: 401 });
 		if (url.pathname === "/api/v1/users/me/") return Response.json(user);
-		if (url.pathname === "/api/v1/workspaces/rayven/members/") {
-			return Response.json({ results: [user] });
-		}
 		if (url.pathname === "/api/v1/workspaces/rayven/projects/") {
 			return Response.json({ results: [{ id: "project-1", name: "Test" }] });
 		}

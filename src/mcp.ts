@@ -280,7 +280,7 @@ export function createPlaneMcpServer(
 							"GET",
 							client.workspacePath("work-items", "search"),
 							{
-								query: { q: required(input.query, "query") },
+								query: { search: required(input.query, "query") },
 							},
 						);
 					case "create": {

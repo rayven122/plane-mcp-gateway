@@ -332,11 +332,12 @@ describe("MCP surface", () => {
 		};
 		await kv.put("plane:pat:v1:access-user-a", JSON.stringify(record));
 		const environment = env(kv);
+		const fetcher = planeFetcher({
+			[SENTINEL_PAT]: { id: "plane-a", email: "a@rayven.cloud" },
+		});
 		const worker = createWorker({
 			authenticate: async () => identity(),
-			fetcher: planeFetcher({
-				[SENTINEL_PAT]: { id: "plane-a", email: "a@rayven.cloud" },
-			}),
+			fetcher,
 		});
 		const response = await invokeWorker(
 			worker,
@@ -344,6 +345,7 @@ describe("MCP surface", () => {
 				method: "POST",
 				headers: {
 					Accept: "application/json, text/event-stream",
+					Authorization: "Bearer client-oauth-token-must-not-reach-plane",
 					"Content-Type": "application/json",
 				},
 				body: JSON.stringify({
@@ -405,6 +407,14 @@ describe("MCP surface", () => {
 		expect(callResponse.status).toBe(200);
 		expect(await callResponse.text()).not.toContain(SENTINEL_PAT);
 		expect(JSON.stringify(log.mock.calls)).not.toContain(SENTINEL_PAT);
+		const planeRequestHeaders = new Headers(
+			fetcher.mock.calls.at(-1)?.[1]?.headers,
+		);
+		expect(planeRequestHeaders.get("Authorization")).toBeNull();
+		expect(planeRequestHeaders.get("X-API-Key")).toBe(SENTINEL_PAT);
+		expect(planeRequestHeaders.get("CF-Access-Client-Id")).toBe(
+			"service-client-id",
+		);
 		log.mockRestore();
 	});
 

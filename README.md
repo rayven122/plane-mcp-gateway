@@ -10,6 +10,14 @@ MCP client -- Cloudflare Managed OAuth --> /mcp
                                              +-- X-API-Key --> tasks.rayven.cloud/api/v1/
 ```
 
+## Authentication model
+
+MCPクライアントは`https://tasks.rayven.cloud/mcp`だけを登録します。Cloudflare AccessがOAuth 2.0 discovery、Dynamic Client Registration、Authorization Code + PKCE、token発行を担当するため、Claude.ai、ChatGPT、CodexへPlane PATや共通Service Tokenを登録しません。
+
+OAuth access tokenはCloudflare境界で署名済みAccess JWTへ交換され、WorkerはそのJWTから利用者を特定します。OAuth access tokenとAccess JWTはPlane APIへ転送しません。Plane APIには、`/mcp/setup`で本人確認済みの利用者PATだけを`X-API-Key`として送ります。
+
+これはPlane公式Hosted MCPのOAuth endpointをCEで再現するものではありません。Plane CEに不足しているOAuth App/API token発行をCloudflareが代行することもありません。そのため、利用者は初回だけ自分のPlane PATをGatewayへ登録する必要があります。
+
 ## Security boundary
 
 - `Cf-Access-Jwt-Assertion`をAccessのJWKS、正確なissuer、Application AUD、有効期限で毎回検証します。

@@ -68,7 +68,7 @@ OAuth access tokenはCloudflare境界で署名済みAccess JWTへ交換され、
 
 次の値はリポジトリ、Wrangler設定、GitHub Actions variablesへ保存せず、対象environmentのWorker Secretとして登録します。
 
-- `ACCESS_AUD`
+- `ACCESS_AUD`（Access ApplicationのAdditional settingsに表示されるApplication Audience (AUD) Tag。Application UUIDやPolicy IDは使用しない）
 - `PLANE_ACCESS_CLIENT_ID`
 - `PLANE_ACCESS_CLIENT_SECRET`
 - `LOG_HASH_KEY`
@@ -77,7 +77,7 @@ OAuth access tokenはCloudflare境界で署名済みAccess JWTへ交換され、
 
 ## Local verification
 
-Node.js 24以上で実行します。
+Node.js 22以上で実行します。
 
 ```bash
 npm ci --ignore-scripts

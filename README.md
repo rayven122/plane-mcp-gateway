@@ -1,229 +1,102 @@
-# Plane MCP Gateway
+# RAYVEN Plane MCP Gateway
 
-A multi-tenant [Model Context Protocol](https://modelcontextprotocol.io) gateway for [Plane](https://plane.so). Each authenticated user can register multiple Plane workspaces / projects through a web UI and expose each one as its own MCP endpoint at `/mcp/<slug>`. MCP clients authenticate via OAuth 2.1 (Clerk as the upstream identity provider) and get a per-config tool surface backed by the user's Plane API key.
+Plane Community Edition向けの利用者別PAT Gatewayです。Cloudflare Access Managed OAuthでMCP利用者を認証し、Cloudflare KVに保存した本人のPlane PATを固定のPlane APIへだけ送ります。
 
-![Plane configurations dashboard](docs/screenshot.png)
-
-Built on Cloudflare Workers (Durable Objects + KV) with TanStack Start for the UI, [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider) for OAuth, and [`@clerk/backend`](https://clerk.com) for identity.
-
-## Features
-
-- **Multi-tenant by URL slug** — one account, many configs. `/mcp/work`, `/mcp/personal`, etc. each carry their own Plane workspace, API key, and tool set.
-- **~109 Plane tools** ported from the official [`plane-mcp-server`](https://github.com/makeplane/plane-mcp-server): work items, cycles, modules, epics, milestones, intake, labels, states, pages, comments, links, work logs, properties, types, members, features, and more.
-- **Project pinning** — optionally lock a config to a single Plane project. When pinned, the `project_id` parameter is automatically removed from every tool schema and project-management tools (`list_projects`, `create_project`, `delete_project`) are hidden. This makes LLM interactions noticeably faster because the model never has to discover or pass a project id.
-- **Live tool refresh** — change a config in the UI and connected MCP sessions see `notifications/tools/list_changed` within seconds. No reconnect needed. If a config is deleted mid-session the next request returns `410 Gone`.
-- **OAuth 2.1 for MCP clients** — Clerk handles user auth; the gateway mints MCP-side tokens that encrypt the user's Clerk identity. Compatible with `mcp-remote`, MCP Inspector, Claude Desktop, Cursor, Windsurf, etc.
-- **Test-from-UI** — every config gets a "Test connection" button that pings the Plane API end-to-end (workspace + api key) and surfaces the actual error message on failure.
-- **Per-user isolation** — KV keys are namespaced by Clerk user id (`plane:cfg:<userId>:<slug>`); a config is only visible to its owner.
-
-## Architecture
-
-```
-                                   ┌───────────────────┐
-                                   │ TanStack Start UI │  /app/configs
-   browser  ──────cookie auth───── │  + Hono /api/*    │  /api/configs/...
-                                   └─────────┬─────────┘
-                                             │ KV: plane:cfg:<userId>:<slug>
-                                             ▼
-┌──────────────┐         ┌─────────────────────────────────┐
-│ MCP client   │ ──OAuth─▶ @cloudflare/workers-oauth-provider │
-│ (Claude etc) │         └─────────────┬───────────────────┘
-└──────────────┘                       │
-                                       ▼
-                            ┌──────────────────────┐
-            /mcp/<slug> ───▶│ MyMCP Durable Object │ ──▶ Plane API
-                            │ (per session)        │     (per-config key)
-                            └──────────────────────┘
+```text
+MCP client -- Cloudflare Managed OAuth --> /mcp
+                                             |
+                 Access sub --> PAT_KV ------+
+                                             |
+                                             +-- X-API-Key --> tasks.rayven.cloud/api/v1/
 ```
 
-Top-level dispatch in `src/server.ts`:
+## Security boundary
 
-| Path pattern | Handler |
-| --- | --- |
-| `/(mcp\|sse)/<slug>(/...)` | strip slug, set `X-Plane-Config-Slug`, forward to OAuthProvider |
-| `/authorize`, `/callback`, `/register`, `/token`, `/.well-known/*` | OAuthProvider |
-| `/api/...` | Hono app (`src/api/index.ts`), Clerk session auth |
-| anything else | TanStack Start (UI) |
+- `Cf-Access-Jwt-Assertion`をAccessのJWKS、正確なissuer、Application AUD、有効期限で毎回検証します。
+- Workerは`@rayven.cloud`のメールだけを受け入れます。`rayven-members`グループの判定は同じAccess ApplicationのAllow policyで行います。
+- KV keyはAccess JWTの`sub`からのみ構成し、リクエストで指定できません。
+- Plane originは`https://tasks.rayven.cloud`、workspaceは`rayven`、API pathは`/api/v1/`へ固定しています。
+- Plane APIのredirectは追従しません。PATは`X-API-Key`、origin用Access Service TokenはWorker Secretから付与します。
+- PAT、ヘッダー、KVレコード、Planeレスポンス本文はログへ出しません。ログはHMAC化したAccess subject、ツール名、成否、時間、HTTP statusだけです。
+- PATはCloudflare KVの保存時暗号化に依存します。Cloudflareアカウント管理者とWorker runtimeが値を取得できる残余リスクは設計上の受容事項です。
+- `/mcp`はStreamable HTTPのみです。SSE endpointと削除系Plane toolはありません。
 
-On each MCP request the Durable Object reloads the config from 2, compares `updatedAt` to the last-registered version, and tears down / re-registers Plane tools if it has changed. The MCP SDK emits `notifications/tools/list_changed` automatically. KV is eventually consistent across colos, so changes typically propagate within seconds (up to ~60 s worst case).
+## Endpoints
 
-## Getting started
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/mcp` | MCP Streamable HTTP |
+| `GET` | `/mcp/setup` | PAT登録画面 |
+| `GET` | `/mcp/api/pat` | 登録状態、末尾4文字、最終検証日時 |
+| `PUT` | `/mcp/api/pat` | PATを検証して保存 |
+| `DELETE` | `/mcp/api/pat` | Gateway上のPATを削除 |
 
-### Prerequisites
+登録時はPlaneの`/api/v1/users/me/`でPATを検証し、AccessのメールとPlaneのメールが一致すること、および`rayven` workspace members APIへアクセスできることを確認します。PAT本体はレスポンスに含めません。
 
-- [Bun](https://bun.sh)
-- A [Clerk](https://clerk.com) application
-- A Cloudflare account (for deployment)
+## Exposed tools
 
-### Local development
+初期版は次の9ツールに限定しています。
 
-1. **Install dependencies**
-   ```bash
-   bun install
-   ```
+- `plane_me`
+- `plane_project`
+- `plane_member`
+- `plane_state`
+- `plane_label`
+- `plane_cycle`
+- `plane_module`
+- `plane_intake`
+- `plane_workitem`
 
-2. **Set up Clerk** — see [Configuring Clerk](#configuring-clerk) below. For local dev use `http://localhost:8788/callback` as the redirect URL.
+`plane_workitem`はlist/retrieve/search/create/updateだけを提供します。他のツールは読み取り専用です。
 
-3. **Configure environment**
-   ```bash
-   cp .env.example .env
-   ```
-   Fill in:
-   ```env
-   CLERK_CLIENT_ID=...
-   CLERK_CLIENT_SECRET=...
-   CLERK_SECRET_KEY=sk_test_...
-   CLERK_PUBLISHABLE_KEY=pk_test_...
-   CLERK_FRONTEND_API=https://your-subdomain.clerk.accounts.dev
-   COOKIE_ENCRYPTION_KEY=<openssl rand -hex 32>
-   ```
+## Configuration
 
-4. **Run the dev server**
-   ```bash
-   bun run dev
-   ```
-   Open http://localhost:8788. Sign in, go to **Plane configurations**, click **New config**, and fill in:
-   - **Slug** — URL identifier (lowercase, hyphens; 2–63 chars). Your MCP endpoint becomes `/mcp/<slug>`.
-   - **Display name** — friendly label.
-   - **Plane workspace slug** — from your Plane workspace URL.
-   - **Plane API key** — from Plane → Settings → API tokens.
-   - **Base URL** *(optional)* — defaults to `https://api.plane.so`. Set this for self-hosted Plane.
-   - **Pinned project** *(optional)* — click **Load projects**, pick one to lock the config to a single project.
+公開設定は`wrangler.jsonc`で固定します。
 
-5. **Test with MCP Inspector**
-   ```bash
-   bunx @modelcontextprotocol/inspector@latest
-   ```
-   Connect to `http://localhost:8788/mcp/<your-slug>` and complete the OAuth flow.
+- `ACCESS_TEAM_DOMAIN=https://rayven122.cloudflareaccess.com`
+- `PLANE_ORIGIN=https://tasks.rayven.cloud`
+- `PLANE_WORKSPACE=rayven`
+- `MCP_HOSTNAME`: devでは一時hostname、本番では`tasks.rayven.cloud`
 
-### Configuring Clerk
+次の値はリポジトリ、Wrangler設定、GitHub Actions variablesへ保存せず、対象environmentのWorker Secretとして登録します。
 
-The gateway acts as an OAuth **client** to Clerk (Clerk is the upstream identity provider) and as an OAuth **server** to MCP clients. You only need to set up the upstream side — the MCP-facing OAuth server is handled by `@cloudflare/workers-oauth-provider` automatically.
+- `ACCESS_AUD`
+- `PLANE_ACCESS_CLIENT_ID`
+- `PLANE_ACCESS_CLIENT_SECRET`
+- `LOG_HASH_KEY`
 
-1. Sign up / log in at the [Clerk Dashboard](https://dashboard.clerk.com) and create an application.
-2. In your application, go to **Configure → OAuth applications** and click **Add OAuth application**. Pick any name — this is internal.
-3. **Redirect URL** — add the gateway's callback. The path is always `/callback`:
-   - Local dev: `http://localhost:8788/callback`
-   - Production: `https://<your-host>/callback`
+`PAT_KV`のproduction/preview namespace IDも実際のnamespace作成後に設定します。値の登録やデプロイは承認されたrunbookに従います。
 
-   You can add multiple URLs to one OAuth application if you want a single Clerk app to serve both environments.
-4. **Scopes** — the gateway requires all of:
-   - `openid`
-   - `profile`
-   - `email`
-   - `offline_access` — needed so MCP clients can refresh tokens without re-prompting the user
-5. Copy these values, you'll need them as worker secrets:
-   - **Client ID** and **Client secret** from the OAuth application you just created → `CLERK_CLIENT_ID`, `CLERK_CLIENT_SECRET`
-   - **Secret key** (`sk_…`) and **Publishable key** (`pk_…`) from **API keys** → `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`
-   - **Frontend API URL** (e.g. `https://your-subdomain.clerk.accounts.dev`) → `CLERK_FRONTEND_API`
+## Local verification
 
-### Production deployment
+Node.js 24以上で実行します。
 
-1. Add `https://<your-host>/callback` to the Clerk OAuth application's redirect URLs (see [Configuring Clerk](#configuring-clerk)).
-2. Create the KV namespace and copy the id into `wrangler.jsonc`:
-   ```bash
-   wrangler kv namespace create OAUTH_KV
-   ```
-3. Set secrets:
-   ```bash
-   wrangler secret put CLERK_CLIENT_ID
-   wrangler secret put CLERK_CLIENT_SECRET
-   wrangler secret put CLERK_SECRET_KEY
-   wrangler secret put CLERK_PUBLISHABLE_KEY
-   wrangler secret put CLERK_FRONTEND_API
-   wrangler secret put COOKIE_ENCRYPTION_KEY
-   ```
-4. Deploy:
-   ```bash
-   bun run deploy
-   ```
-
-## Connecting MCP clients
-
-Each config exposes both transports:
-
-- `https://<host>/mcp/<slug>` — Streamable HTTP (preferred)
-- `https://<host>/sse/<slug>` — SSE (deprecated, still supported)
-
-### Claude Desktop / Cursor / Windsurf
-
-Use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a stdio adapter, since most desktop clients don't yet ship OAuth-capable remote transports:
-
-```json
-{
-  "mcpServers": {
-    "plane-work": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://<your-host>/mcp/work"]
-    }
-  }
-}
+```bash
+npm ci --ignore-scripts
+npm run check
+npm audit --omit=dev --audit-level=high
+npm run security:sentinel
 ```
 
-The first connection opens a browser for the Clerk OAuth flow; tokens are cached locally afterward.
+テストはJWT issuer/audience/domain、固定Plane host、redirect拒否、メール不一致、Access sub単位の分離、CSRF/Host拒否、MCP tool allowlistを確認します。`security:sentinel`はbuild成果物へのsentinel PATとsource map混入を拒否します。
 
-### Native HTTP clients
+## Rollout
 
-Clients that speak OAuth 2.1 + Streamable HTTP can connect directly to `https://<host>/mcp/<slug>`. Discovery is published at `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource` per RFC 9728.
+1. dev用KV namespaceと一時hostnameを作成する。
+2. dev environmentへ4つのWorker Secretを対話登録する。
+3. 一時hostnameを同じ`rayven-members` Access policyで保護し、Managed OAuthを有効にする。
+4. sentinel PATでHTTP response、Worker logs/trace、ブラウザStorage、Network、build成果物を確認する。
+5. Codex、Claude.ai、ChatGPTでOAuth、`tools/list`、読み取りを各1回確認する。
+6. 明示承認後にWorker routeを`tasks.rayven.cloud/mcp*`へ切り替える。
 
-## Project pinning
+本番切替までは既存Tunnel `/mcp` routeと旧MCP Deploymentを残します。障害時はWorker routeを外して既存PATヘッダー方式へ戻し、KVとPlane側PATは保持します。
 
-A config is in one of two modes:
+## Access policy requirements
 
-| Mode | `project_id` parameter | `list_projects` / `create_project` / `delete_project` |
-| --- | --- | --- |
-| **All projects** (default) | required on every tool that touches a project | available |
-| **Pinned to one project** | removed from every tool schema | hidden |
+- ApplicationはMCP serverまたはself-hosted applicationとして`/mcp*`を保護する。
+- Managed OAuthを有効にする。
+- AllowはGoogle Workspace IdPの`@rayven.cloud`かつ`rayven-members`だけにする。
+- Bypass、Everyone、anonymousは設定しない。
+- Plane originへのWorker通信専用Service TokenはService Auth policyだけで許可し、人のMCP認証には使わない。
 
-Pinning is the right choice when an MCP session is scoped to one project — it eliminates a tool round-trip the LLM otherwise has to make to resolve the project id, and keeps the visible tool list focused.
-
-You can toggle pinning at any time from the config's edit page. Existing MCP sessions pick up the change automatically on their next request.
-
-## Adding tools
-
-Two kinds of tools:
-
-1. **Top-level tools** — available to every authenticated user regardless of config. Register in `MyMCP.init()` in `src/mcp/mcp-app.ts`.
-
-2. **Plane tools** — per-config, registered per request. Add to `src/plane/tools/<resource>.ts`:
-   ```ts
-   server.tool(
-     "snake_case_name",
-     "human-readable description",
-     { ...projectIdField(ctx), other_param: z.string() },
-     async (input) =>
-       toolResult(() =>
-         resource.method(ctx.config, ctx.workspaceSlug, {
-           project_id: requireProjectId(ctx, input),
-           other_param: input.other_param,
-         }),
-       ),
-   );
-   ```
-   The HTTP call lives in `src/plane/resources/<resource>.ts`. Wire new resources into `src/plane/tools/index.ts`.
-
-See `CLAUDE.md` for the full architecture reference (Plane URL conventions, helper functions, common gotchas).
-
-## Tech stack
-
-- [Cloudflare Workers](https://developers.cloudflare.com/workers/) + Durable Objects + KV
-- [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider) — OAuth 2.1 server
-- [`@clerk/backend`](https://clerk.com) + [`@clerk/tanstack-react-start`](https://clerk.com) — identity
-- [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) + [`agents`](https://github.com/cloudflare/agents) — Durable MCP
-- [TanStack Start](https://tanstack.com/start) + [TanStack Router](https://tanstack.com/router) — UI
-- [Hono](https://hono.dev) — `/api/*`
-- [shadcn/ui](https://ui.shadcn.com) + Tailwind v4 — components
-- [Zod](https://zod.dev) — schema validation
-- [Bun](https://bun.sh) — package manager / runtime
-
-## Security notes
-
-- Each config's Plane API key is stored in KV under a user-scoped key. The plaintext key is **never** returned over the HTTP API — list/get/patch responses always show `••••<last4>`.
-- OAuth state cookies are `__Host-`-prefixed, HTTP-only, one-time-use, and bound to a 10-minute KV-side TTL.
-- The OAuth metadata response is rewritten to `https://` on non-local hosts to support tunneled deployments.
-- `WWW-Authenticate` headers on 401s include `resource_metadata=` per RFC 9728.
-- Envelope-encrypting Plane API keys with `COOKIE_ENCRYPTION_KEY` is a planned follow-up; for now treat the KV namespace as sensitive.
-
-## License
-
-[Apache 2.0](LICENSE)
+Cloudflare公式資料: [Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)、[Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)、[KV data security](https://developers.cloudflare.com/kv/reference/data-security/)

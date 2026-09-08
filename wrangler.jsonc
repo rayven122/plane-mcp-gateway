@@ -22,5 +22,29 @@
 		"enabled": true,
 		"head_sampling_rate": 1
 	},
-	"upload_source_maps": false
+	"upload_source_maps": false,
+	"env": {
+		"dev": {
+			"name": "rayven-plane-mcp-gateway-dev",
+			"workers_dev": false,
+			"routes": [
+				{
+					"pattern": "plane-mcp-dev.rayven.cloud",
+					"custom_domain": true
+				}
+			],
+			"vars": {
+				"ACCESS_TEAM_DOMAIN": "https://rayven122.cloudflareaccess.com",
+				"PLANE_ORIGIN": "https://tasks.rayven.cloud",
+				"PLANE_WORKSPACE": "rayven",
+				"MCP_HOSTNAME": "plane-mcp-dev.rayven.cloud"
+			},
+			"kv_namespaces": [
+				{
+					"binding": "PAT_KV",
+					"id": "2a0f28ac8abd4cf9bb291c368d4bc1b4"
+				}
+			]
+		}
+	}
 }

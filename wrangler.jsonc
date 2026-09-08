@@ -45,6 +45,28 @@
 					"id": "2a0f28ac8abd4cf9bb291c368d4bc1b4"
 				}
 			]
+		},
+		"production": {
+			"name": "rayven-plane-mcp-gateway",
+			"workers_dev": false,
+			"routes": [
+				{
+					"pattern": "tasks.rayven.cloud/mcp*",
+					"zone_name": "rayven.cloud"
+				}
+			],
+			"vars": {
+				"ACCESS_TEAM_DOMAIN": "https://rayven122.cloudflareaccess.com",
+				"PLANE_ORIGIN": "https://tasks.rayven.cloud",
+				"PLANE_WORKSPACE": "rayven",
+				"MCP_HOSTNAME": "tasks.rayven.cloud"
+			},
+			"kv_namespaces": [
+				{
+					"binding": "PAT_KV",
+					"id": "f1fd8bf551aa464495b12d7a93c5f2be"
+				}
+			]
 		}
 	}
 }

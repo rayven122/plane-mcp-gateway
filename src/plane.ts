@@ -54,7 +54,8 @@ export class PlaneClient {
 			| "PLANE_ACCESS_CLIENT_SECRET"
 		>,
 		private readonly pat: string,
-		private readonly fetcher: Fetcher = fetch,
+		private readonly fetcher: Fetcher = (input, init) =>
+			globalThis.fetch(input, init),
 	) {
 		this.origin = requireFixedOrigin(env.PLANE_ORIGIN);
 		if (env.PLANE_WORKSPACE !== "rayven") {
@@ -142,7 +143,7 @@ export async function verifyPat(
 	>,
 	pat: string,
 	accessEmail: string,
-	fetcher: Fetcher = fetch,
+	fetcher: Fetcher = (input, init) => globalThis.fetch(input, init),
 	now: Date = new Date(),
 ): Promise<PatRecord> {
 	const client = new PlaneClient(env, pat, fetcher);

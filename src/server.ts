@@ -33,7 +33,8 @@ export function createWorker(
 	options: { authenticate?: Authenticator; fetcher?: Fetcher } = {},
 ): ExportedHandler<Env> {
 	const authenticate = options.authenticate ?? authenticateAccess;
-	const fetcher = options.fetcher ?? fetch;
+	const fetcher =
+		options.fetcher ?? ((input, init) => globalThis.fetch(input, init));
 
 	return {
 		async fetch(request, env, executionContext) {

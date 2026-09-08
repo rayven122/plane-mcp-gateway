@@ -96,7 +96,7 @@ export async function handlePatApi(
 	request: Request,
 	env: Env,
 	identity: AccessIdentity,
-	fetcher: Fetcher = fetch,
+	fetcher: Fetcher = (input, init) => globalThis.fetch(input, init),
 ): Promise<Response> {
 	if (request.method === "GET") {
 		const record = await loadPat(env.PAT_KV, identity.sub);

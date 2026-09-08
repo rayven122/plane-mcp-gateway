@@ -1,49 +1,93 @@
-import startHandler from "@tanstack/react-start/server-entry";
-import { apiApp } from "./api";
-import { MyMCP, oauthProvider, wrapOAuthResponse } from "./mcp/mcp-app";
+import { createMcpHandler } from "agents/mcp/server";
+import { authenticateAccess, subjectHash } from "./auth";
+import { createPlaneMcpServer } from "./mcp";
+import { PlaneClient } from "./plane";
+import { handlePatApi, setupPage } from "./setup";
+import { loadPat } from "./storage";
+import type { AccessIdentity, Env, Fetcher } from "./types";
 
-export { MyMCP };
+type Authenticator = (request: Request, env: Env) => Promise<AccessIdentity>;
 
-const MCP_SLUG_RE = /^\/(mcp|sse)\/([^/]+)(\/.*)?$/;
-const OAUTH_DIRECT_RE = /^\/(authorize|callback|register|token|\.well-known)/;
+const SECURITY_HEADERS = {
+	"Cache-Control": "no-store",
+	"Referrer-Policy": "no-referrer",
+	"X-Content-Type-Options": "nosniff",
+};
 
-export default {
-	async fetch(
-		request: Request,
-		env: Env,
-		ctx: ExecutionContext,
-	): Promise<Response> {
-		const url = new URL(request.url);
+function jsonError(error: string, status: number): Response {
+	return Response.json(
+		{ error },
+		{
+			status,
+			headers: { ...SECURITY_HEADERS, "Content-Type": "application/json" },
+		},
+	);
+}
 
-		const mcpMatch = url.pathname.match(MCP_SLUG_RE);
-		if (mcpMatch) {
-			const [, transport, slug, rest] = mcpMatch;
-			const rewritten = new URL(request.url);
-			rewritten.pathname = `/${transport}${rest ?? ""}`;
-			const headers = new Headers(request.headers);
-			headers.set("X-Plane-Config-Slug", slug);
-			const forwarded = new Request(rewritten, {
-				method: request.method,
+function validHost(request: Request, env: Env): boolean {
+	const hostname = new URL(request.url).hostname.toLowerCase();
+	return hostname === env.MCP_HOSTNAME.toLowerCase();
+}
+
+export function createWorker(
+	options: { authenticate?: Authenticator; fetcher?: Fetcher } = {},
+): ExportedHandler<Env> {
+	const authenticate = options.authenticate ?? authenticateAccess;
+	const fetcher =
+		options.fetcher ?? ((input, init) => globalThis.fetch(input, init));
+
+	return {
+		async fetch(request, env, executionContext) {
+			if (!validHost(request, env)) return jsonError("invalid host", 400);
+			const path = new URL(request.url).pathname;
+			if (path !== "/mcp" && path !== "/mcp/setup" && path !== "/mcp/api/pat") {
+				return jsonError("not found", 404);
+			}
+
+			let identity: AccessIdentity;
+			try {
+				identity = await authenticate(request, env);
+			} catch {
+				return jsonError("unauthorized", 401);
+			}
+
+			if (path === "/mcp/setup") {
+				if (request.method !== "GET") {
+					return new Response(null, { status: 405, headers: { Allow: "GET" } });
+				}
+				return setupPage();
+			}
+			if (path === "/mcp/api/pat") {
+				return handlePatApi(request, env, identity, fetcher);
+			}
+
+			const record = await loadPat(env.PAT_KV, identity.sub);
+			if (!record || record.email !== identity.email) {
+				return jsonError("plane PAT is not configured; open /mcp/setup", 428);
+			}
+			const hashedSubject = await subjectHash(identity.sub, env.LOG_HASH_KEY);
+			const client = new PlaneClient(env, record.pat, fetcher);
+			const handler = createMcpHandler(
+				() => createPlaneMcpServer(client, hashedSubject),
+				{
+					route: "/mcp",
+					allowedHostnames: [env.MCP_HOSTNAME],
+					allowedOriginHostnames: [env.MCP_HOSTNAME],
+					legacy: "stateless",
+				},
+			);
+			const response = await handler(request, env, executionContext);
+			const headers = new Headers(response.headers);
+			for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+				headers.set(name, value);
+			}
+			return new Response(response.body, {
+				status: response.status,
+				statusText: response.statusText,
 				headers,
-				body: request.body,
-				redirect: "manual",
 			});
-			const res = await oauthProvider.fetch(forwarded, env, ctx);
-			return wrapOAuthResponse(res, forwarded);
-		}
+		},
+	};
+}
 
-		if (OAUTH_DIRECT_RE.test(url.pathname)) {
-			const res = await oauthProvider.fetch(request, env, ctx);
-			return wrapOAuthResponse(res, request);
-		}
-
-		if (url.pathname.startsWith("/api/")) {
-			const stripped = new URL(request.url);
-			stripped.pathname = url.pathname.slice(4);
-			const forwarded = new Request(stripped, request);
-			return apiApp.fetch(forwarded, env, ctx);
-		}
-
-		return startHandler.fetch(request);
-	},
-} satisfies ExportedHandler<Env>;
+export default createWorker();

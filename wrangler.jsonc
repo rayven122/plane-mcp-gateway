@@ -1,56 +1,72 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "planemcpgw",
+	"name": "rayven-plane-mcp-gateway",
 	"main": "src/server.ts",
-	"compatibility_date": "2026-05-01",
+	"compatibility_date": "2026-09-08",
 	"compatibility_flags": ["nodejs_compat"],
-	/**
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 *
-	 * Commands to set secrets:
-	 * npx wrangler secret put CLERK_CLIENT_ID
-	 * npx wrangler secret put CLERK_CLIENT_SECRET
-	 * npx wrangler secret put CLERK_SECRET_KEY
-	 * npx wrangler secret put CLERK_FRONTEND_API
-	 * npx wrangler secret put COOKIE_ENCRYPTION_KEY
-	 *
-	 * Per-user Plane configurations are stored in OAUTH_KV (no PLANE_* env vars).
-	 */
-	"migrations": [
-		{
-			"new_sqlite_classes": ["MyMCP"],
-			"tag": "v1"
-		}
-	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"class_name": "MyMCP",
-				"name": "MCP_OBJECT"
-			}
-		]
+	"workers_dev": true,
+	"vars": {
+		"ACCESS_TEAM_DOMAIN": "https://rayven122.cloudflareaccess.com",
+		"PLANE_ORIGIN": "https://tasks.rayven.cloud",
+		"PLANE_WORKSPACE": "rayven",
+		"MCP_HOSTNAME": "tasks.rayven.cloud"
 	},
 	"kv_namespaces": [
 		{
-			"binding": "OAUTH_KV",
-			"id": "74ef76f891b24987a6230480e8a454da"
+			"binding": "PAT_KV",
+			"id": "REPLACE_WITH_PRODUCTION_KV_ID",
+			"preview_id": "REPLACE_WITH_PREVIEW_KV_ID"
 		}
 	],
 	"observability": {
-		"enabled": true
+		"enabled": true,
+		"head_sampling_rate": 1
 	},
-	"dev": {
-		"port": 8788
-	},
-	"routes": [
-		{
-			"custom_domain": true,
-			"pattern": "planemcpgw.rockyshoreslabs.io"
+	"upload_source_maps": false,
+	"env": {
+		"dev": {
+			"name": "rayven-plane-mcp-gateway-dev",
+			"workers_dev": false,
+			"routes": [
+				{
+					"pattern": "plane-mcp-dev.rayven.cloud",
+					"custom_domain": true
+				}
+			],
+			"vars": {
+				"ACCESS_TEAM_DOMAIN": "https://rayven122.cloudflareaccess.com",
+				"PLANE_ORIGIN": "https://tasks.rayven.cloud",
+				"PLANE_WORKSPACE": "rayven",
+				"MCP_HOSTNAME": "plane-mcp-dev.rayven.cloud"
+			},
+			"kv_namespaces": [
+				{
+					"binding": "PAT_KV",
+					"id": "2a0f28ac8abd4cf9bb291c368d4bc1b4"
+				}
+			]
+		},
+		"production": {
+			"name": "rayven-plane-mcp-gateway",
+			"workers_dev": false,
+			"routes": [
+				{
+					"pattern": "tasks.rayven.cloud/mcp*",
+					"zone_name": "rayven.cloud"
+				}
+			],
+			"vars": {
+				"ACCESS_TEAM_DOMAIN": "https://rayven122.cloudflareaccess.com",
+				"PLANE_ORIGIN": "https://tasks.rayven.cloud",
+				"PLANE_WORKSPACE": "rayven",
+				"MCP_HOSTNAME": "tasks.rayven.cloud"
+			},
+			"kv_namespaces": [
+				{
+					"binding": "PAT_KV",
+					"id": "f1fd8bf551aa464495b12d7a93c5f2be"
+				}
+			]
 		}
-	]
+	}
 }
